@@ -1,3 +1,4 @@
+using HybridCLR;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -8,41 +9,69 @@ using UnityEngine.Networking;
 
 public class LoadDll : MonoBehaviour
 {
+
+
+    public static List<string> AOTMetaAssemblyNames { get; } = new List<string>()
+    {
+        "mscorlib.dll",
+        "System.dll",
+        "System.Core.dll",
+    };
+
     void Start()
     {
-        StartCoroutine(DownLoadDlls(this.StartGame));
+        StartCoroutine(DownLoadAssets(this.StartGame));
     }
 
-    private static Dictionary<string, byte[]> s_abBytes = new Dictionary<string, byte[]>();
+    private static Dictionary<string, byte[]> s_assetDatas = new Dictionary<string, byte[]>();
 
-    public static byte[] GetAbBytes(string dllName)
+    public static byte[] GetAssetData(string dllName)
     {
-        return s_abBytes[dllName];
+        return s_assetDatas[dllName];
     }
 
-    IEnumerator DownLoadDlls(Action onDownloadComplete)
+    private string GetWebRequestPath(string asset)
     {
-        var abs = new string[]
+        var path = $"{Application.streamingAssetsPath}/{asset}";
+        if (!path.Contains("://"))
         {
-            "common",
-        };
-        foreach (var ab in abs)
+            path = "file://" + path;
+        }
+        return path;
+    }
+
+    IEnumerator DownLoadAssets(Action onDownloadComplete)
+    {
+        var assets = new List<string>
         {
-            string dllPath = $"{Application.streamingAssetsPath}/{ab}";
-            Debug.Log($"start download ab:{ab}");
+            "prefabs",
+            "Assembly-CSharp.dll",
+        }.Concat(AOTMetaAssemblyNames);
+
+        foreach (var asset in assets)
+        {
+            string dllPath = GetWebRequestPath(asset);
+            Debug.Log($"start download asset:{dllPath}");
             UnityWebRequest www = UnityWebRequest.Get(dllPath);
             yield return www.SendWebRequest();
 
+#if UNITY_2020_1_OR_NEWER
             if (www.result != UnityWebRequest.Result.Success)
             {
                 Debug.Log(www.error);
             }
+#else
+            if (www.isHttpError || www.isNetworkError)
+            {
+                Debug.Log(www.error);
+            }
+#endif
             else
             {
                 // Or retrieve results as binary data
-                byte[] abBytes = www.downloadHandler.data;
-                Debug.Log($"dll:{ab}  size:{abBytes.Length}");
-                s_abBytes[ab] = abBytes;
+                byte[] assetData = www.downloadHandler.data;
+                Debug.Log($"dll:{asset}  size:{assetData.Length}");
+                s_assetDatas[asset] = assetData;
             }
         }
 
@@ -52,38 +81,38 @@ public class LoadDll : MonoBehaviour
 
     void StartGame()
     {
-        LoadGameDll();
-        RunMain();
-    }
+        LoadMetadataForAOTAssemblies();
 
-    private System.Reflection.Assembly gameAss;
-
-    public static AssetBundle AssemblyAssetBundle { get; private set; }
-
-    private void LoadGameDll()
-    {
-        AssetBundle dllAB = AssemblyAssetBundle = AssetBundle.LoadFromMemory(GetAbBytes("common"));
 #if !UNITY_EDITOR
-        TextAsset dllBytes1 = dllAB.LoadAsset<TextAsset>("HotFix.dll.bytes");
-        System.Reflection.Assembly.Load(dllBytes1.bytes);
-        TextAsset dllBytes2 = dllAB.LoadAsset<TextAsset>("HotFix2.dll.bytes");
-        gameAss = System.Reflection.Assembly.Load(dllBytes2.bytes);
+        var gameAss = System.Reflection.Assembly.Load(GetAssetData("Assembly-CSharp.dll"));
 #else
-        gameAss = AppDomain.CurrentDomain.GetAssemblies().First(assembly => assembly.GetName().Name == "HotFix2");
+        var gameAss = AppDomain.CurrentDomain.GetAssemblies().First(assembly => assembly.GetName().Name == "Assembly-CSharp");
 #endif
 
-        GameObject testPrefab = GameObject.Instantiate(dllAB.LoadAsset<UnityEngine.GameObject>("HotUpdatePrefab.prefab"));
+        AssetBundle prefabAb = AssetBundle.LoadFromMemory(GetAssetData("prefabs"));
+        GameObject testPrefab = Instantiate(prefabAb.LoadAsset<GameObject>("HotUpdatePrefab.prefab"));
     }
 
-    public void RunMain()
+
+
+    /// <summary>
+    /// Îªaot assembly¼ÓÔØÔ­Ê¼metadata£¬ Õâ¸ö´úÂë·Åaot»òÕßÈÈ¸üĞÂ¶¼ĞĞ¡£
+    /// Ò»µ©¼ÓÔØºó£¬Èç¹ûAOT·ºĞÍº¯Êı¶ÔÓ¦nativeÊµÏÖ²»´æÔÚ£¬Ôò×Ô¶¯Ìæ»»Îª½âÊÍÄ£Ê½Ö´ĞĞ
+    /// </summary>
+    private static void LoadMetadataForAOTAssemblies()
     {
-        if (gameAss == null)
+        // ¿ÉÒÔ¼ÓÔØÈÎÒâaot assemblyµÄ¶ÔÓ¦µÄdll¡£µ«ÒªÇódll±ØĞëÓëunity build¹ı³ÌÖĞÉú³ÉµÄ²Ã¼ôºóµÄdllÒ»ÖÂ£¬¶ø²»ÄÜÖ±½ÓÊ¹ÓÃÔ­Ê¼dll¡£
+        // ÎÒÃÇÔÚBuildProcessorsÀïÌí¼ÓÁË´¦Àí´úÂë£¬ÕâĞ©²Ã¼ôºóµÄdllÔÚ´ò°üÊ±×Ô¶¯±»¸´ÖÆµ½ {ÏîÄ¿Ä¿Â¼}/HybridCLRData/AssembliesPostIl2CppStrip/{Target} Ä¿Â¼¡£
+
+        /// ×¢Òâ£¬²¹³äÔªÊı¾İÊÇ¸øAOT dll²¹³äÔªÊı¾İ£¬¶ø²»ÊÇ¸øÈÈ¸üĞÂdll²¹³äÔªÊı¾İ¡£
+        /// ÈÈ¸üĞÂdll²»È±ÔªÊı¾İ£¬²»ĞèÒª²¹³ä£¬Èç¹ûµ÷ÓÃLoadMetadataForAOTAssembly»á·µ»Ø´íÎó
+        /// 
+        foreach (var aotDllName in AOTMetaAssemblyNames)
         {
-            UnityEngine.Debug.LogError("dllæœªåŠ è½½");
-            return;
+            byte[] dllBytes = GetAssetData(aotDllName);
+            // ¼ÓÔØassembly¶ÔÓ¦µÄdll£¬»á×Ô¶¯ÎªËühook¡£Ò»µ©aot·ºĞÍº¯ÊıµÄnativeº¯Êı²»´æÔÚ£¬ÓÃ½âÊÍÆ÷°æ±¾´úÂë
+            LoadImageErrorCode err = RuntimeApi.LoadMetadataForAOTAssembly(dllBytes);
+            Debug.Log($"LoadMetadataForAOTAssembly:{aotDllName}. ret:{err}");
         }
-        var appType = gameAss.GetType("App");
-        var mainMethod = appType.GetMethod("Main");
-        mainMethod.Invoke(null, null);
     }
 }
